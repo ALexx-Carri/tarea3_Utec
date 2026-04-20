@@ -4,7 +4,25 @@
 #include <string>
 #include <functional>
 #include<map>
+#include <fstream>
 using namespace std;
+
+map<string, string> cargarEnv(const string& ruta) {
+    map<string, string> env;
+    ifstream archivo(ruta);
+    string linea;
+
+    while (std::getline(archivo, linea)) {
+        size_t pos = linea.find('=');
+        if (pos != std::string::npos) {
+            std::string clave = linea.substr(0, pos);
+            std::string valor = linea.substr(pos + 1);
+            env[clave] = valor;
+        }
+    }
+    return env;
+}
+
 class Entity {
 private:string nombre;
     int vida;int vida_maxima;int energia /* no se si usar energia(tal vez relleno) */;
@@ -72,8 +90,20 @@ public:
     void executeMacro(const string&name);
 };
 int main() {
-    Entity jugador("Sebastian",100);
+    auto misDatos = cargarEnv(".env");
+    string nombreFinal;
+    map<string, string>::iterator it = misDatos.find("USER_NAME");
+    if (it == misDatos.end()) {
+        cerr << "CRITICO: No se pudo cargar el nombre del usuario desde .env" << endl;
+        nombreFinal = "Prota Generico";
+    } else {
+        cout << "Configuracion cargada para: " << it->second << endl;
+        nombreFinal = it->second;
+    }
+    Entity jugador(nombreFinal, 100);
     CommandCenter center(jugador);
-    center.registerCommand("heal",[&jugador](const list<string>& args){healCommand(jugador, args);});
+    center.registerCommand("heal", [&jugador](const list<string>& args) {
+        healCommand(jugador, args);
+    });
     return 0;
 }
