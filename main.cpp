@@ -4,242 +4,150 @@
 #include <functional>
 #include <map>
 #include <fstream>
-
+#include <algorithm>
 using namespace std;
-
-map<string, string> cargarEnv(const string& ruta) {
-    map<string, string> env;
-    ifstream archivo(ruta);
-    string linea;
-
-    while (getline(archivo, linea)) {
-        size_t pos = linea.find('=');
-        if (pos != string::npos) {
-            string clave = linea.substr(0, pos);
-            string valor = linea.substr(pos + 1);
-            env[clave] = valor;
-        }
-    }
-    return env;
-}
-
+using Command = function<void(const std::list<std::string>&)>;
 class Entity {
 private:
     string nombre;
-    int vida, vida_maxima;
+    int vida;
+    int vida_maxima;
     float posx, posy;
-
 public:
-    Entity(string n="Jugador", int v=100)
-        : nombre(n), vida(v), vida_maxima(v), posx(0), posy(0) {}
-
-    int getVida() const { return vida; }
-
+    Entity(string n = "Jugador", int v = 100) : nombre(n), vida(v), vida_maxima(v), posx(0), posy(0) {}
     void heal(int cantidad) {
-        vida += cantidad;
-        if (vida > vida_maxima) vida = vida_maxima;
+        vida = min(vida + cantidad, vida_maxima);
     }
-
     void damage(int cantidad) {
-        vida -= cantidad;
-        if (vida < 0) vida = 0;
+        vida = max(vida - cantidad, 0);
     }
-
     void move(float x, float y) {
         posx += x;
         posy += y;
     }
-
-    void reset() {
-        vida = vida_maxima;
-        posx = posy = 0;
-    }
-
-    string statusString() const {
-        return "Vida=" + to_string(vida) +
-               " Pos=(" + to_string(posx) + "," + to_string(posy) + ")";
-    }
-
+    int getVida() const { return vida; }
+    string getNombre() const { return nombre; }
     void printStatus() const {
-        cout << statusString() << endl;
+        cout << "--- Status de " << nombre << " ---" << endl;
+        cout << "Vida: " << vida << "/" << vida_maxima << endl;
+        cout << "Posicion: (" << posx << ", " << posy << ")" << endl;
+        cout << "------------------------" << endl;
     }
 };
-
-using Command = function<void(const list<string>&)>;
-
+void healCommand(Entity& target, const list<string>& args) {
+    if (args.empty()) return;
+    try {
+        int amount = stoi(args.front());
+        target.heal(amount);
+    } catch (...) { cerr << "Error en heal." << endl; }
+}
 class DamageFunctor {
 private:
     Entity& entity;
-    int contador;
+    int contadorUso = 0;
 public:
-    DamageFunctor(Entity& e) : entity(e), contador(0) {}
-
+    DamageFunctor(Entity& e) : entity(e) {}
     void operator()(const list<string>& args) {
-        if (args.empty()) {
-            cerr << "Error: damage requiere argumento\n";
-            return;
-        }
-        int val = stoi(args.front());
-        entity.damage(val);
-        contador++;
-        cout << "Damage aplicado. Veces usado: " << contador << endl;
+        if (args.empty()) return;
+        try {
+            int d = stoi(args.front());
+            entity.damage(d);
+            contadorUso++;
+            cout << "[Functor Log] Daño aplicado. Usos totales: " << contadorUso << endl;
+        } catch (...) { cerr << "Error en damage." << endl; }
     }
 };
-
 class CommandCenter {
 private:
     Entity& entity;
     map<string, Command> commands;
     list<string> history;
-
     map<string, list<pair<string, list<string>>>> macros;
-
 public:
     CommandCenter(Entity& e) : entity(e) {}
-
     void registerCommand(const string& name, Command cmd) {
         commands[name] = cmd;
     }
-
-    void execute(const string& name, const list<string>& args) {
-        map<string, Command>::iterator it = commands.find(name);
-
-        if (it != commands.end()) {
-            string before = entity.statusString();
-            it->second(args);
-            string after = entity.statusString();
-
-            history.push_back(name + " | " + before + " -> " + after);
-        } else {
-            cerr << "Error: comando no encontrado: " << name << endl;
-        }
-    }
-
     void removeCommand(const string& name) {
         map<string, Command>::iterator it = commands.find(name);
         if (it != commands.end()) {
             commands.erase(it);
-            cout << "Comando eliminado: " << name << endl;
+            cout << "Comando '" << name << "' eliminado." << endl;
+        }
+    }
+    void execute(const string& name, const list<string>& args) {
+        map<string, Command>::iterator it = commands.find(name);
+        if (it != commands.end()) {
+            int antes = entity.getVida();
+            it->second(args);
+            int despues = entity.getVida();
+            string log = "Cmd: " + name + " | Vida: " + to_string(antes) + " -> " + to_string(despues);
+            history.push_back(log);
         } else {
-            cerr << "No existe el comando\n";
+            cerr << "Error: Comando '" << name << "' no encontrado." << endl;
         }
     }
-
-    void showHistory() {
-        list<string>::iterator it;
-        for (it = history.begin(); it != history.end(); ++it) {
-            cout << *it << endl;
-        }
-    }
-
-    void registerMacro(const string& name,
-        const list<pair<string, list<string>>>& steps) {
+    void registerMacro(const string& name, const list<pair<string, list<string>>>& steps) {
         macros[name] = steps;
     }
-
     void executeMacro(const string& name) {
-        auto it = macros.find(name);
-
-        if (it == macros.end()) {
-            cerr << "Macro no encontrada\n";
-            return;
+        auto itM = macros.find(name);
+        if (itM == macros.end()) return;
+        cout << ">>> Ejecutando Macro: " << name << endl;
+        list<pair<string, list<string>>>::iterator itStep;
+        for (itStep = itM->second.begin(); itStep != itM->second.end(); ++itStep) {
+            this->execute(itStep->first, itStep->second);
         }
-
-        list<pair<string, list<string>>>::const_iterator step;
-
-        for (step = it->second.begin(); step != it->second.end(); ++step) {
-            if (commands.find(step->first) == commands.end()) {
-                cerr << "Error en macro, comando inexistente: " << step->first << endl;
-                return;
-            }
-            execute(step->first, step->second);
+    }
+    void imprimirHistorial() {
+        cout << "\n--- HISTORIAL DE EJECUCION ---" << endl;
+        list<string>::iterator itH;
+        for (itH = history.begin(); itH != history.end(); ++itH) {
+            cout << *itH << endl;
         }
     }
 };
-
-void healCommand(Entity& target, const list<string>& args) {
-    if (args.empty()) {
-        cerr << "heal requiere argumento\n";
-        return;
+map<string, string> cargarEnv(const string& ruta) {
+    map<string, string> env;
+    ifstream archivo(ruta);
+    string linea;
+    while (getline(archivo, linea)) {
+        size_t pos = linea.find('=');
+        if (pos != string::npos) {
+            env[linea.substr(0, pos)] = linea.substr(pos + 1);
+        }
     }
-    int val = stoi(args.front());
-    target.heal(val);
+    return env;
 }
-
-int main() {
-    auto datos = cargarEnv(".env");
-    string nombre = datos["USER_NAME"];
-
-    Entity jugador(nombre, 100);
+int main() {auto misDatos = cargarEnv(".env");
+    string miNombre;
+    map<string, string>::iterator it = misDatos.find("USER_NAME");
+    if (it != misDatos.end() && !it->second.empty()) {
+        miNombre = it->second;
+        cout << "Configuracion cargada exitosamente." << endl;
+    } else {
+        miNombre = "Prota Generico";
+        cerr << "ADVERTENCIA: .env no encontrado o USER_NAME ausente." << endl;
+    }
+    Entity jugador(miNombre, 100);
     CommandCenter center(jugador);
-
-    center.registerCommand("heal", [&jugador](const list<string>& args) {
-        healCommand(jugador, args);
-    });
-
-
+    center.registerCommand("heal", [&jugador](const list<string>& a) { healCommand(jugador, a); });
     center.registerCommand("move", [&jugador](const list<string>& args) {
         if (args.size() < 2) return;
-        auto it = args.begin();
-        float x = stof(*it++);
-        float y = stof(*it);
-        jugador.move(x, y);
+        jugador.move(stof(args.front()), stof(*(++args.begin())));
     });
-
-
-    DamageFunctor dmg(jugador);
-    center.registerCommand("damage", dmg);
-
-
-    center.registerCommand("status", [&jugador](const list<string>&) {
-        jugador.printStatus();
-    });
-
-    center.registerCommand("reset", [&jugador](const list<string>&) {
-        jugador.reset();
-    });
-
-    list<string> args;
-
-    args = {"10"};
-    center.execute("heal", args);
-
-    args = {"5"};
-    center.execute("damage", args);
-
-    args = {"3", "4"};
-    center.execute("move", args);
-
-    args.clear();
-    center.execute("status", args);
-
-    center.registerMacro("combo1", {
-        {"heal", {"10"}},
-        {"move", {"1", "1"}},
-        {"status", {}}
-    });
-
-    center.registerMacro("combo2", {
-        {"damage", {"20"}},
-        {"status", {}}
-    });
-
-    center.registerMacro("combo3", {
-        {"reset", {}},
-        {"status", {}}
-    });
-    cout << "\n--- Ejecutando Macro combo1 ---\n";
-    center.executeMacro("combo1");
-
-    cout << "\n--- Ejecutando Macro combo2 ---\n";
-    center.executeMacro("combo2");
-
-    cout << "\n--- Ejecutando Macro combo3 ---\n";
-    center.executeMacro("combo3");
-    center.removeCommand("heal");
-    center.execute("heal", {"10"}); 
-    cout << "\n--- HISTORIAL ---\n";
-    center.showHistory();
+    center.registerCommand("damage", DamageFunctor(jugador));
+    center.registerCommand("status", [&jugador](const list<string>&) { jugador.printStatus(); });
+    center.registerMacro("recovery", {{"heal", {"20"}}, {"status", {}}});
+    center.registerMacro("skirmish", {{"move", {"2", "2"}}, {"damage", {"10"}}});
+    center.registerMacro("full_check", {{"status", {}}, {"move", {"0", "0"}}, {"status", {}}});
+    center.execute("status", {});
+    center.execute("move", {"5", "10"});
+    center.execute("damage", {"25"});
+    center.executeMacro("skirmish");
+    center.executeMacro("recovery");
+    center.execute("comando_inexistente", {});
+    center.imprimirHistorial();
 
     return 0;
 }
